@@ -1,0 +1,33 @@
+# ── Dependencies ──────────────────────────────────────────────────────────────
+node_modules/
+
+# ── Environment / secrets ─────────────────────────────────────────────────────
+.env
+.env.local
+.env.*.local
+
+# ── Build output ──────────────────────────────────────────────────────────────
+dist/
+build/
+
+# ── Prisma ────────────────────────────────────────────────────────────────────
+# Keep migrations/ committed — never ignore them
+backend/prisma/*.db
+backend/prisma/*.db-journal
+
+# ── Logs ──────────────────────────────────────────────────────────────────────
+*.log
+logs/
+npm-debug.log*
+npm-install.log
+prisma-migrate.log
+prisma-seed.log
+
+# ── OS / editor ───────────────────────────────────────────────────────────────
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+
+# ── PDF output (generated at runtime) ─────────────────────────────────────────
+backend/invoices/*.pdf

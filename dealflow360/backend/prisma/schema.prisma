@@ -1,0 +1,313 @@
+// DealFlow360 — Prisma Schema
+// Both tracks build against this. Do not modify without team review.
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ─── Enums ────────────────────────────────────────────────────────────────────
+
+enum Role {
+  ADMIN
+  SALES_REP
+  SALES_MANAGER
+  FINANCE
+  CUSTOMER
+}
+
+enum Tier {
+  BRONZE
+  SILVER
+  GOLD
+}
+
+// ─── Users & Customers ────────────────────────────────────────────────────────
+
+model User {
+  id                 String    @id @default(uuid())
+  name               String
+  email              String    @unique
+  passwordHash       String
+  role               Role      @default(SALES_REP)
+  mustChangePassword Boolean   @default(false)
+  customerId         String?   @unique // set only when role = CUSTOMER; @unique enforces 1-to-1 with Customer
+  customer           Customer? @relation(fields: [customerId], references: [id])
+  createdAt          DateTime  @default(now())
+}
+
+model Customer {
+  id          String      @id @default(uuid())
+  companyName String
+  tier        Tier        @default(BRONZE)
+  realEmail   String      // real inbox — invoices and initial credentials go here, NEVER the portal login
+  portalUser  User?
+  quotations  Quotation[]
+  createdAt   DateTime    @default(now())
+}
+
+// ─── Product Catalogue ────────────────────────────────────────────────────────
+
+model ProductCategory {
+  id                 String    @id @default(uuid())
+  name               String    @unique
+  maxDiscountPercent Decimal
+  products           Product[]
+}
+
+model Product {
+  id             String           @id @default(uuid())
+  name           String
+  categoryId     String
+  category       ProductCategory  @relation(fields: [categoryId], references: [id])
+  price          Decimal
+  unit           String
+  taxPercent     Decimal
+  description    String?
+  isSubscription Boolean          @default(false)
+  variants       ProductVariant[]
+  stockLevels    StockLevel[]
+  createdAt      DateTime         @default(now())
+}
+
+model ProductVariant {
+  id            String  @id @default(uuid())
+  productId     String
+  product       Product @relation(fields: [productId], references: [id])
+  attributeName String  // e.g. "RAM", "Color"
+  value         String  // e.g. "16GB", "Black"
+  extraPrice    Decimal @default(0)
+}
+
+// ─── Pricing & Discounts ──────────────────────────────────────────────────────
+
+model PriceListRule {
+  id        String  @id @default(uuid())
+  tier      Tier
+  currency  String  @default("USD")
+  ruleType  String  // "FIXED" | "PERCENT_OFF_BASE"
+  value     Decimal
+  productId String? // null = applies to all products for that tier
+}
+
+model TierDiscountCeiling {
+  id                 String  @id @default(uuid())
+  tier               Tier    @unique
+  maxDiscountPercent Decimal
+}
+
+// ─── Approval Chain Config ────────────────────────────────────────────────────
+
+model ApprovalChainRule {
+  id            String   @id @default(uuid())
+  minScore      Decimal
+  maxScore      Decimal? // null = no upper bound
+  requiredLevel String   // "NONE" | "SALES_MANAGER" | "SALES_MANAGER_THEN_FINANCE"
+}
+
+// ─── Warehouses & Inventory ───────────────────────────────────────────────────
+
+model Warehouse {
+  id                 String       @id @default(uuid())
+  name               String
+  location           String?
+  shippingCostWeight Decimal      @default(1)
+  stockLevels        StockLevel[]
+}
+
+model StockLevel {
+  id           String    @id @default(uuid())
+  warehouseId  String
+  warehouse    Warehouse @relation(fields: [warehouseId], references: [id])
+  productId    String
+  product      Product   @relation(fields: [productId], references: [id])
+  onHand       Int
+  reserved     Int       @default(0)
+  reorderPoint Int       @default(0)
+  reorderQty   Int       @default(0)
+
+  @@unique([warehouseId, productId])
+}
+
+// ─── Subscriptions ────────────────────────────────────────────────────────────
+
+model SubscriptionPlan {
+  id               String @id @default(uuid())
+  name             String
+  productId        String
+  interval         String // "MONTHLY" | "QUARTERLY" | "YEARLY"
+  prorationRule    String @default("DAILY_PRORATE")
+  cancellationRule String @default("REFUND_UNUSED_DAYS") // "NO_REFUND" | "CREDIT_NOTE"
+}
+
+// ─── Upsell Rules ─────────────────────────────────────────────────────────────
+
+model UpsellRule {
+  id                 String  @id @default(uuid())
+  primaryProductId   String
+  suggestedProductId String
+  minMarginPercent   Decimal
+  isPromoted         Boolean @default(false)
+}
+
+// ─── Quotations & Approval Workflow ──────────────────────────────────────────
+
+model Quotation {
+  id                  String               @id @default(uuid())
+  customerId          String
+  customer            Customer             @relation(fields: [customerId], references: [id])
+  repId               String
+  status              String               @default("DRAFT")
+  // DRAFT | PENDING_APPROVAL | APPROVED | REJECTED | UNDER_NEGOTIATION | CONFIRMED |
+  // FULFILLMENT | INVOICED | CLOSED
+  blendedRiskScore    Decimal              @default(0)
+  lines               QuotationLine[]
+  approvalSteps       ApprovalStep[]
+  negotiationMessages NegotiationMessage[]
+  lastActivityAt      DateTime             @default(now())
+  createdAt           DateTime             @default(now())
+}
+
+model QuotationLine {
+  id                       String    @id @default(uuid())
+  quotationId              String
+  quotation                Quotation @relation(fields: [quotationId], references: [id])
+  productId                String
+  quantity                 Int
+  unitPrice                Decimal
+  discountPercent          Decimal   @default(0)
+  lineType                 String    // "ONE_TIME" | "RECURRING"
+  subscriptionPlanId       String?
+  effectiveCeilingSnapshot Decimal   // computed MIN(tier,category) at time of entry, for audit
+  pointsOverSnapshot       Decimal   @default(0)
+}
+
+model ApprovalStep {
+  id          String    @id @default(uuid())
+  quotationId String
+  quotation   Quotation @relation(fields: [quotationId], references: [id])
+  level       String    // "SALES_MANAGER" | "FINANCE"
+  status      String    @default("PENDING") // PENDING | APPROVED | REJECTED | RETURNED
+  actedById   String?
+  actedAt     DateTime?
+  reason      String?
+  order       Int       // sequence within the chain
+}
+
+model NegotiationMessage {
+  id          String    @id @default(uuid())
+  quotationId String
+  quotation   Quotation @relation(fields: [quotationId], references: [id])
+  senderType  String    // "CUSTOMER" | "REP"
+  message     String
+  lineId      String?   // optional line-level comment reference
+  createdAt   DateTime  @default(now())
+}
+
+// ─── Orders & Fulfillment ─────────────────────────────────────────────────────
+
+model Order {
+  id          String   @id @default(uuid())
+  quotationId String   @unique
+  status      String   @default("PENDING_FULFILLMENT")
+  confirmedAt DateTime @default(now())
+}
+
+model FulfillmentSplit {
+  id            String  @id @default(uuid())
+  orderId       String
+  warehouseId   String
+  productId     String
+  qtyFulfilled  Int
+  estimatedCost Decimal
+}
+
+model BackorderItem {
+  id         String    @id @default(uuid())
+  orderId    String
+  productId  String
+  qtyPending Int
+  resolvedAt DateTime?
+}
+
+// ─── Active Subscriptions ─────────────────────────────────────────────────────
+
+model Subscription {
+  id             String   @id @default(uuid())
+  orderId        String
+  planId         String
+  quantity       Int
+  status         String   @default("ACTIVE") // ACTIVE | PAUSED | CANCELLED
+  nextBillDate   DateTime
+  cycleStartDate DateTime
+}
+
+// ─── Billing & Finance ────────────────────────────────────────────────────────
+
+model Invoice {
+  id             String   @id @default(uuid())
+  orderId        String?
+  subscriptionId String?
+  type           String   // "ONE_TIME" | "RECURRING"
+  amount         Decimal
+  status         String   @default("UNPAID") // UNPAID | PAID | PARTIAL
+  dueDate        DateTime
+  pdfPath        String?
+  createdAt      DateTime @default(now())
+}
+
+model Payment {
+  id                String   @id @default(uuid())
+  invoiceId         String
+  razorpayOrderId   String
+  razorpayPaymentId String?
+  razorpaySignature String?
+  amount            Decimal
+  status            String   @default("CREATED") // CREATED | VERIFIED | FAILED
+  createdAt         DateTime @default(now())
+}
+
+model CreditNote {
+  id             String   @id @default(uuid())
+  subscriptionId String
+  amount         Decimal
+  reason         String
+  createdAt      DateTime @default(now())
+}
+
+// ─── Deal Health & Monitoring ─────────────────────────────────────────────────
+
+model DealHealthFlag {
+  id          String   @id @default(uuid())
+  quotationId String
+  type        String   // "STALLED" | "DISCOUNT_ANOMALY" | "DELIVERY_SLIPPAGE"
+  detail      String
+  resolved    Boolean  @default(false)
+  createdAt   DateTime @default(now())
+}
+
+// ─── Notifications & Audit ────────────────────────────────────────────────────
+
+model Notification {
+  id        String   @id @default(uuid())
+  userId    String
+  type      String
+  message   String
+  relatedId String?
+  isRead    Boolean  @default(false)
+  createdAt DateTime @default(now())
+}
+
+model ActivityLog {
+  id         String   @id @default(uuid())
+  userId     String?
+  action     String
+  entityType String
+  entityId   String
+  details    Json?
+  createdAt  DateTime @default(now())
+}
