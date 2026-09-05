@@ -1,0 +1,41 @@
+{
+  "name": "@auth-module/frontend",
+  "version": "1.0.0",
+  "description": "Reusable React authentication components and hooks",
+  "main": "./dist/index.js",
+  "module": "./dist/index.mjs",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "import": "./dist/index.mjs",
+      "require": "./dist/index.js",
+      "types": "./dist/index.d.ts"
+    }
+  },
+  "scripts": {
+    "build": "vite build --mode lib",
+    "dev": "tsc --watch",
+    "clean": "rimraf dist",
+    "lint": "tsc --noEmit"
+  },
+  "peerDependencies": {
+    "react": ">=18.0.0",
+    "react-dom": ">=18.0.0"
+  },
+  "dependencies": {
+    "@auth-module/core": "workspace:*",
+    "axios": "1.7.2"
+  },
+  "devDependencies": {
+    "@types/node": "20.14.2",
+    "@types/react": "18.3.3",
+    "@types/react-dom": "18.3.0",
+    "@vitejs/plugin-react": "4.3.1",
+    "react": "18.3.1",
+    "react-dom": "18.3.1",
+    "rimraf": "5.0.7",
+    "typescript": "5.4.5",
+    "vite": "5.3.3",
+    "vite-plugin-dts": "3.9.1"
+  }
+}

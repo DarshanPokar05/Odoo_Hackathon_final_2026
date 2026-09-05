@@ -1,0 +1,95 @@
+// ──────────────────────────────────────────────────────────────────────────
+// Auth Module — Prisma Schema
+// ──────────────────────────────────────────────────────────────────────────
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ── Enums ─────────────────────────────────────────────────────────────────
+
+enum UserStatus {
+  ACTIVE
+  SUSPENDED
+  DELETED
+}
+
+enum OtpPurpose {
+  REGISTRATION
+  PASSWORD_RESET
+  LOGIN_VERIFICATION
+  PHONE_VERIFICATION
+  EMAIL_VERIFICATION
+}
+
+// ── Users ─────────────────────────────────────────────────────────────────
+
+model User {
+  id           String     @id @default(uuid())
+  name         String
+  email        String?    @unique
+  phone        String?    @unique
+  passwordHash String     @map("password_hash")
+  isVerified   Boolean    @default(false) @map("is_verified")
+  status       UserStatus @default(ACTIVE)
+  createdAt    DateTime   @default(now()) @map("created_at")
+  updatedAt    DateTime   @updatedAt @map("updated_at")
+  lastLoginAt  DateTime?  @map("last_login_at")
+
+  otpRecords     OtpRecord[]
+  refreshTokens  RefreshToken[]
+
+  @@index([email])
+  @@index([phone])
+  @@index([status])
+  @@map("users")
+}
+
+// ── OTP Records ───────────────────────────────────────────────────────────
+
+model OtpRecord {
+  id          String     @id @default(uuid())
+  userId      String     @map("user_id")
+  purpose     OtpPurpose
+  otpHash     String     @map("otp_hash")
+  expiresAt   DateTime   @map("expires_at")
+  attempts    Int        @default(0)
+  maxAttempts Int        @default(5) @map("max_attempts")
+  resendCount Int        @default(0) @map("resend_count")
+  maxResends  Int        @default(5) @map("max_resends")
+  lastSentAt  DateTime   @map("last_sent_at")
+  verifiedAt  DateTime?  @map("verified_at")
+  createdAt   DateTime   @default(now()) @map("created_at")
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  // One active OTP per user per purpose at a time
+  @@unique([userId, purpose])
+  @@index([userId])
+  @@index([expiresAt])
+  @@map("otp_records")
+}
+
+// ── Refresh Tokens ────────────────────────────────────────────────────────
+// Stored for rotation & revocation (replaces external token store for
+// self-contained deployments; swap for Redis in high-throughput scenarios).
+
+model RefreshToken {
+  id        String   @id @default(uuid())
+  jti       String   @unique                // JWT ID — the lookup key
+  userId    String   @map("user_id")
+  expiresAt DateTime @map("expires_at")
+  revokedAt DateTime? @map("revoked_at")
+  createdAt DateTime @default(now()) @map("created_at")
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([expiresAt])
+  @@map("refresh_tokens")
+}
