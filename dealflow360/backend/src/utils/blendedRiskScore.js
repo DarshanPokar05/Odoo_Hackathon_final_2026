@@ -3,69 +3,89 @@
 /**
  * Blended Risk Score Calculator
  * ─────────────────────────────
- * Produces a 0–100 score that drives the approval chain.
- * Higher score = more risky → requires higher approval level.
+ * Implements Global Constraint 1 exactly.
  *
- * Inputs (all from a fully-populated quotation):
- *   lines[]  — array of QuotationLine objects (with effectiveCeilingSnapshot, discountPercent, pointsOverSnapshot, lineType)
- *   customer — Customer object with { tier }
- *   totalValue — pre-tax total of the quotation (Decimal or number)
+ * RULE:
+ *   effectiveCeiling(line) = MIN(customerTierCeiling, line.category.maxDiscountPercent)
+ *   pointsOver(line)       = MAX(0, discountPercent - effectiveCeiling)
+ *   blendedRiskScore       = SUM(pointsOver across all lines)
  *
- * Scoring components (weights sum to 100):
- *   1. Max discount breach (40 pts)   — worst single line's pointsOverSnapshot / ceiling * 40
- *   2. Tier risk (20 pts)             — BRONZE=20, SILVER=10, GOLD=0
- *   3. Revenue concentration (20 pts) — single line > 60% of total value
- *   4. Recurring ratio (20 pts)       — % of total value that is RECURRING (higher = lower risk, inverted)
+ * The score is NOT capped at 100 — it grows with every breaching line.
+ * The caller maps the raw score to an approval level via the ApprovalChainRule table.
  *
- * This module is pure (no DB calls) so it is independently testable.
+ * WORKED EXAMPLE (must reproduce exactly):
+ *   Gold customer, tierCeiling = 15%
+ *   Laptop line:        discount 12%, Hardware category ceiling 15% → effective 15% → 0 pts over
+ *   Setup Service line: discount 18%, Service  category ceiling 10% → effective 10% → 8 pts over
+ *   blendedRiskScore = 0 + 8 = 8
  *
- * @param {{ lines: object[], customer: object, totalValue: number }} params
- * @returns {number} score 0–100, rounded to 2 decimal places
+ * This is a pure function — no DB calls — so it is independently testable.
+ *
+ * @param {object} params
+ * @param {Array}  params.lines    — array of objects:
+ *                                     { discountPercent, effectiveCeilingSnapshot }
+ *                                   pointsOverSnapshot is computed here and returned per-line.
+ * @param {number|string} params.tierCeilingPercent  — customer's tier ceiling (e.g. 15 for Gold)
+ * @param {Array}  [params.categoryCeilings]  — array of { productId, maxDiscountPercent }
+ *                                              only needed when effectiveCeilingSnapshot is not
+ *                                              already pre-computed on each line.
+ *
+ * TWO CALL MODES:
+ *   Mode A — lines already carry effectiveCeilingSnapshot (quotation already saved, lines from DB)
+ *             Just pass lines with { discountPercent, effectiveCeilingSnapshot }
+ *             tierCeilingPercent and categoryCeilings are ignored.
+ *
+ *   Mode B — computing fresh (e.g. on submit before saving)
+ *             Pass tierCeilingPercent + categoryCeilings[{productId, maxDiscountPercent}]
+ *             lines must carry { productId, discountPercent }
+ *             Returns enriched lines with effectiveCeilingSnapshot and pointsOverSnapshot set.
+ *
+ * @returns {{ score: number, lines: Array }}
+ *   score — the blended risk score (sum of all pointsOver values)
+ *   lines — input lines enriched with effectiveCeilingSnapshot and pointsOverSnapshot
  */
-function blendedRiskScore({ lines, customer, totalValue }) {
-  if (!lines || lines.length === 0) return 0;
+function blendedRiskScore({ lines, tierCeilingPercent, categoryCeilings = [] }) {
+  if (!lines || lines.length === 0) return { score: 0, lines: [] };
 
-  const total = Number(totalValue) || 0;
+  // Build a productId → categoryMaxDiscount lookup for Mode B
+  const categoryMap = {};
+  for (const c of categoryCeilings) {
+    categoryMap[c.productId] = Number(c.maxDiscountPercent);
+  }
 
-  // ── 1. Max discount breach (40 pts) ────────────────────────────────────────
-  let maxBreachScore = 0;
+  let totalScore = 0;
+  const enriched = [];
+
   for (const line of lines) {
-    const ceiling = Number(line.effectiveCeilingSnapshot);
-    const points  = Number(line.pointsOverSnapshot);
-    if (ceiling > 0 && points > 0) {
-      const ratio = Math.min(points / ceiling, 1); // cap at 1 (100% over ceiling)
-      maxBreachScore = Math.max(maxBreachScore, ratio * 40);
+    const discount = Number(line.discountPercent) || 0;
+
+    let effectiveCeiling;
+
+    if (line.effectiveCeilingSnapshot !== undefined && line.effectiveCeilingSnapshot !== null) {
+      // Mode A — use pre-computed snapshot from DB
+      effectiveCeiling = Number(line.effectiveCeilingSnapshot);
+    } else {
+      // Mode B — compute fresh
+      const tierCeiling     = Number(tierCeilingPercent) || 0;
+      const categoryCeiling = categoryMap[line.productId] ?? tierCeiling;
+      effectiveCeiling      = Math.min(tierCeiling, categoryCeiling);
     }
+
+    const pointsOver = Math.max(0, discount - effectiveCeiling);
+    totalScore += pointsOver;
+
+    enriched.push({
+      ...line,
+      effectiveCeilingSnapshot: effectiveCeiling,
+      pointsOverSnapshot:       pointsOver,
+    });
   }
 
-  // ── 2. Tier risk (20 pts) ──────────────────────────────────────────────────
-  const tierScores = { BRONZE: 20, SILVER: 10, GOLD: 0 };
-  const tierScore = tierScores[customer?.tier] ?? 20;
-
-  // ── 3. Revenue concentration (20 pts) ─────────────────────────────────────
-  let concentrationScore = 0;
-  if (total > 0) {
-    for (const line of lines) {
-      const lineTotal = Number(line.unitPrice) * Number(line.quantity) * (1 - Number(line.discountPercent) / 100);
-      if (lineTotal / total > 0.6) {
-        concentrationScore = 20;
-        break;
-      }
-    }
-  }
-
-  // ── 4. Recurring ratio (20 pts, inverted — recurring = safer) ─────────────
-  let recurringValue = 0;
-  for (const line of lines) {
-    if (line.lineType === 'RECURRING') {
-      recurringValue += Number(line.unitPrice) * Number(line.quantity) * (1 - Number(line.discountPercent) / 100);
-    }
-  }
-  const recurringRatio = total > 0 ? recurringValue / total : 0;
-  const recurringScore = (1 - recurringRatio) * 20; // 0% recurring → 20 pts risk
-
-  const raw = maxBreachScore + tierScore + concentrationScore + recurringScore;
-  return Math.round(Math.min(raw, 100) * 100) / 100;
+  // Round to 2 decimal places to avoid floating-point drift
+  return {
+    score: Math.round(totalScore * 100) / 100,
+    lines: enriched,
+  };
 }
 
 module.exports = { blendedRiskScore };

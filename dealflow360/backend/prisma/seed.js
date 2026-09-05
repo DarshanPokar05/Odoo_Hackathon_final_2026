@@ -76,9 +76,10 @@ async function main() {
   console.log('[seed] Done ✓');
 }
 
-main()
-  .catch((err) => {
-    console.error('[seed] Error:', err);
-    process.exit(1);
-  })
-  .finally(() => prisma.$disconnect());
+if (require.main === module) {
+  main()
+    .catch((err) => { console.error('[seed] Error:', err); process.exit(1); })
+    .finally(() => prisma.$disconnect());
+}
+
+module.exports = { main };

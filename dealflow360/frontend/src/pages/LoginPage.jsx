@@ -1,9 +1,11 @@
 import { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import api from '../api/axios.js';
+import { useAuth } from '../store/authContext.jsx';
 
 export default function LoginPage() {
   const navigate = useNavigate();
+  const { setToken } = useAuth();
   const [form, setForm] = useState({ email: '', password: '' });
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
@@ -15,10 +17,10 @@ export default function LoginPage() {
     try {
       const { data } = await api.post('/auth/login', form);
       if (data.data.mustChangePassword) {
-        localStorage.setItem('df360_temp_token', data.data.token);
+        localStorage.setItem('df360_temp_userId', data.data.userId);
         navigate('/change-password');
       } else {
-        localStorage.setItem('df360_token', data.data.token);
+        setToken(data.data.token);
         navigate('/');
       }
     } catch (err) {
