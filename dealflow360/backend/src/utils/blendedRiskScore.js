@@ -1,91 +1,143 @@
 'use strict';
 
 /**
- * Blended Risk Score Calculator
- * ─────────────────────────────
- * Implements Global Constraint 1 exactly.
+ * blendedRiskScore.js
+ * ====================
+ * Pure, side-effect-free calculator for the Blended Discount Risk Score.
  *
- * RULE:
- *   effectiveCeiling(line) = MIN(customerTierCeiling, line.category.maxDiscountPercent)
- *   pointsOver(line)       = MAX(0, discountPercent - effectiveCeiling)
- *   blendedRiskScore       = SUM(pointsOver across all lines)
+ * BUSINESS RULE (Global Constraint 1):
+ *   a. Each product category has its own maxDiscountPercent ceiling.
+ *      Each customer tier has its own TierDiscountCeiling.
+ *   b. EFFECTIVE CEILING for a line =
+ *        MIN(customerTierCeiling, line.categoryCeiling)
+ *      A Gold customer's 15% tier ceiling does NOT override a stricter
+ *      10% category ceiling — the STRICTER of the two always wins.
+ *   c. POINTS OVER for a line =
+ *        MAX(0, discountGiven - effectiveCeiling)
+ *      A line within its effective ceiling contributes 0 points.
+ *   d. BLENDED RISK SCORE for the quotation =
+ *        SUM(pointsOver across all lines)
  *
- * The score is NOT capped at 100 — it grows with every breaching line.
- * The caller maps the raw score to an approval level via the ApprovalChainRule table.
- *
- * WORKED EXAMPLE (must reproduce exactly):
- *   Gold customer, tierCeiling = 15%
- *   Laptop line:        discount 12%, Hardware category ceiling 15% → effective 15% → 0 pts over
- *   Setup Service line: discount 18%, Service  category ceiling 10% → effective 10% → 8 pts over
- *   blendedRiskScore = 0 + 8 = 8
- *
- * This is a pure function — no DB calls — so it is independently testable.
- *
- * @param {object} params
- * @param {Array}  params.lines    — array of objects:
- *                                     { discountPercent, effectiveCeilingSnapshot }
- *                                   pointsOverSnapshot is computed here and returned per-line.
- * @param {number|string} params.tierCeilingPercent  — customer's tier ceiling (e.g. 15 for Gold)
- * @param {Array}  [params.categoryCeilings]  — array of { productId, maxDiscountPercent }
- *                                              only needed when effectiveCeilingSnapshot is not
- *                                              already pre-computed on each line.
- *
- * TWO CALL MODES:
- *   Mode A — lines already carry effectiveCeilingSnapshot (quotation already saved, lines from DB)
- *             Just pass lines with { discountPercent, effectiveCeilingSnapshot }
- *             tierCeilingPercent and categoryCeilings are ignored.
- *
- *   Mode B — computing fresh (e.g. on submit before saving)
- *             Pass tierCeilingPercent + categoryCeilings[{productId, maxDiscountPercent}]
- *             lines must carry { productId, discountPercent }
- *             Returns enriched lines with effectiveCeilingSnapshot and pointsOverSnapshot set.
- *
- * @returns {{ score: number, lines: Array }}
- *   score — the blended risk score (sum of all pointsOver values)
- *   lines — input lines enriched with effectiveCeilingSnapshot and pointsOverSnapshot
+ * REFERENCE EXAMPLE (must return exactly 8):
+ *   Customer tier: GOLD — tierCeiling = 15%
+ *   Line 1: Hardware product, categoryCeiling = 15%, discountGiven = 12%
+ *     → effectiveCeiling = MIN(15, 15) = 15
+ *     → pointsOver       = MAX(0, 12 - 15) = 0
+ *   Line 2: Service product, categoryCeiling = 10%, discountGiven = 18%
+ *     → effectiveCeiling = MIN(15, 10) = 10   ← category is STRICTER
+ *     → pointsOver       = MAX(0, 18 - 10) = 8
+ *   blendedScore = 0 + 8 = 8  ✓
  */
-function blendedRiskScore({ lines, tierCeilingPercent, categoryCeilings = [] }) {
-  if (!lines || lines.length === 0) return { score: 0, lines: [] };
 
-  // Build a productId → categoryMaxDiscount lookup for Mode B
-  const categoryMap = {};
-  for (const c of categoryCeilings) {
-    categoryMap[c.productId] = Number(c.maxDiscountPercent);
-  }
+/**
+ * Compute the effective ceiling for a single line.
+ *
+ * @param {number} tierCeilingPercent     — the customer's tier max discount %
+ * @param {number} categoryCeilingPercent — the product category's max discount %
+ * @returns {number} effectiveCeiling
+ */
+function effectiveCeiling(tierCeilingPercent, categoryCeilingPercent) {
+  // Rule 1b: take the stricter (lower) of the two ceilings
+  return Math.min(Number(tierCeilingPercent), Number(categoryCeilingPercent));
+}
 
-  let totalScore = 0;
-  const enriched = [];
+/**
+ * Compute points-over for a single line.
+ *
+ * @param {number} discountGiven  — the actual discount % entered on the line
+ * @param {number} ceiling        — effectiveCeiling for this line
+ * @returns {number} pointsOver   — always >= 0
+ */
+function pointsOver(discountGiven, ceiling) {
+  // Rule 1c: only positive exceedance counts
+  return Math.max(0, Number(discountGiven) - Number(ceiling));
+}
 
-  for (const line of lines) {
-    const discount = Number(line.discountPercent) || 0;
+/**
+ * Compute the full blended risk score for a quotation.
+ *
+ * @param {Array<{
+ *   discountPercent:    number,
+ *   categoryCeiling:    number,   // ProductCategory.maxDiscountPercent
+ * }>} lines
+ *   Each line carries the discount the rep entered and the category ceiling.
+ *   The tier ceiling is passed separately (it is the same for all lines on
+ *   a given quotation because it comes from the customer's tier).
+ *
+ * @param {number} tierCeilingPercent
+ *   The customer's tier discount ceiling (TierDiscountCeiling.maxDiscountPercent).
+ *
+ * @returns {{
+ *   blendedScore: number,
+ *   lineDetails: Array<{
+ *     index:            number,
+ *     discountGiven:    number,
+ *     categoryCeiling:  number,
+ *     tierCeiling:      number,
+ *     effectiveCeiling: number,
+ *     pointsOver:       number,
+ *   }>
+ * }}
+ *   Returns both the aggregate score AND per-line breakdown for the
+ *   "Why This Quote Was Flagged" table on the Approval Detail screen.
+ */
+function computeBlendedRiskScore(lines, tierCeilingPercent) {
+  let blendedScore = 0;
+  const lineDetails = [];
 
-    let effectiveCeiling;
+  for (let i = 0; i < lines.length; i++) {
+    const line     = lines[i];
+    const ec       = effectiveCeiling(tierCeilingPercent, line.categoryCeiling);
+    const pts      = pointsOver(line.discountPercent, ec);
+    blendedScore  += pts;
 
-    if (line.effectiveCeilingSnapshot !== undefined && line.effectiveCeilingSnapshot !== null) {
-      // Mode A — use pre-computed snapshot from DB
-      effectiveCeiling = Number(line.effectiveCeilingSnapshot);
-    } else {
-      // Mode B — compute fresh
-      const tierCeiling     = Number(tierCeilingPercent) || 0;
-      const categoryCeiling = categoryMap[line.productId] ?? tierCeiling;
-      effectiveCeiling      = Math.min(tierCeiling, categoryCeiling);
-    }
-
-    const pointsOver = Math.max(0, discount - effectiveCeiling);
-    totalScore += pointsOver;
-
-    enriched.push({
-      ...line,
-      effectiveCeilingSnapshot: effectiveCeiling,
-      pointsOverSnapshot:       pointsOver,
+    lineDetails.push({
+      index:            i,
+      discountGiven:    Number(line.discountPercent),
+      categoryCeiling:  Number(line.categoryCeiling),
+      tierCeiling:      Number(tierCeilingPercent),
+      effectiveCeiling: ec,
+      pointsOver:       pts,
     });
   }
 
-  // Round to 2 decimal places to avoid floating-point drift
-  return {
-    score: Math.round(totalScore * 100) / 100,
-    lines: enriched,
-  };
+  return { blendedScore, lineDetails };
 }
 
-module.exports = { blendedRiskScore };
+// ── Validation helper used in tests and service layer ─────────────────────────
+
+/**
+ * Self-test: verify the reference example from Global Constraint 1f returns 8.
+ * Call this at module load in dev to catch accidental regressions.
+ * Throws if the result is wrong.
+ */
+function assertReferenceExample() {
+  // Gold customer: tierCeiling = 15%
+  // Hardware line: categoryCeiling = 15%, discount = 12% → 0 pts over
+  // Service line:  categoryCeiling = 10%, discount = 18% → 8 pts over
+  // Expected blendedScore = 8
+  const lines = [
+    { discountPercent: 12, categoryCeiling: 15 },   // Hardware
+    { discountPercent: 18, categoryCeiling: 10 },   // Professional Services
+  ];
+  const { blendedScore } = computeBlendedRiskScore(lines, 15); // Gold tier = 15%
+
+  if (blendedScore !== 8) {
+    throw new Error(
+      `[blendedRiskScore] Reference example FAILED: expected 8, got ${blendedScore}`
+    );
+  }
+  return true;
+}
+
+// Run self-test at module load (only in non-production to not slow hot paths)
+if (process.env.NODE_ENV !== 'production') {
+  assertReferenceExample();
+}
+
+module.exports = {
+  effectiveCeiling,
+  pointsOver,
+  computeBlendedRiskScore,
+  assertReferenceExample,
+};

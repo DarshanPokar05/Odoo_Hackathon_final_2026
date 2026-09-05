@@ -8,7 +8,13 @@ const MODEL = 'Notification';
 const field = MODEL.charAt(0).toLowerCase() + MODEL.slice(1);
 
 exports.list = async (query, user) => {
-  return prisma[field].findMany();
+  const where = { userId: user.userId };
+  if (query?.unreadOnly === 'true') where.isRead = false;
+  return prisma[field].findMany({
+    where,
+    orderBy: { createdAt: 'desc' },
+    take: 50,
+  });
 };
 
 exports.getOne = async (id, user) => {

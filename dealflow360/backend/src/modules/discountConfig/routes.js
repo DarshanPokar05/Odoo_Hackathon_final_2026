@@ -13,10 +13,12 @@ const writeRoles = ['ADMIN'];
 // Tier discount ceilings
 router.get('/ceilings',        requireAuth, requireRole(...readRoles),  ctrl.listCeilings);
 router.put('/ceilings/:tier',  requireAuth, requireRole(...writeRoles), ctrl.updateCeiling);
+router.patch('/ceilings/:tier',requireAuth, requireRole(...writeRoles), ctrl.updateCeiling);
 
 // Approval chain rules
 router.get('/approval-rules',  requireAuth, requireRole(...readRoles),  ctrl.listApprovalRules);
 router.put('/approval-rules',  requireAuth, requireRole(...writeRoles), ctrl.saveApprovalRules);
+router.patch('/approval-rules',requireAuth, requireRole(...writeRoles), ctrl.saveApprovalRules);
 
 // ── Generic fallback routes (/:id wildcard — must be LAST) ────────────────────
 router.get('/',       requireAuth, requireRole(...readRoles),  ctrl.list);

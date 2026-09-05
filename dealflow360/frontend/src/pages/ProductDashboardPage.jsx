@@ -28,6 +28,7 @@ export default function ProductDashboardPage() {
   const deleteMutation = useMutation({
     mutationFn: (id) => productsApi.remove(id),
     onSuccess:  () => queryClient.invalidateQueries({ queryKey: ['products'] }),
+    onError:    (e) => alert(e.response?.data?.error?.message ?? 'Failed to delete product'),
   });
 
   // ── Derived KPIs ──────────────────────────────────────────────────────────

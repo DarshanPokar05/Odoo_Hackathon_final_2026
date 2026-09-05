@@ -7,6 +7,8 @@ const http    = require('http');
 const express = require('express');
 const cors    = require('cors');
 const morgan  = require('morgan');
+const helmet  = require('helmet');
+const rateLimit = require('express-rate-limit');
 
 const { PORT, CLIENT_URL, NODE_ENV } = require('./config/env');
 const { initSocket }                  = require('./config/socket');
@@ -41,14 +43,46 @@ const activityLogRoutes   = require('./modules/activityLogs/routes');
 // ── App setup ─────────────────────────────────────────────────────────────────
 const app = express();
 
+// Security headers
+app.use(helmet());
+
 app.use(cors({
   origin:      CLIENT_URL,
   credentials: true,
 }));
 
 app.use(morgan(NODE_ENV === 'production' ? 'combined' : 'dev'));
-app.use(express.json());
+
+// json parser FIRST — must run before any route handlers
+app.use((req, res, next) => {
+  // For the Razorpay webhook, we need raw bytes for signature verification.
+  // All other routes use json.
+  if (req.path === '/api/payments/webhook') return next();
+  express.json()(req, res, next);
+});
 app.use(express.urlencoded({ extended: true }));
+
+// NOTE: /api/payments/webhook registers its own express.raw() before json parser
+// so it must be mounted first to capture rawBody before express.json() consumes it.
+app.use('/api/payments', paymentRoutes);
+
+// ── Rate limiting ─────────────────────────────────────────────────────────────
+// Strict limit for auth endpoints (15 requests per 15 minutes per IP)
+const authLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max:      15,
+  message:  { success: false, error: { code: 'RATE_LIMITED', message: 'Too many requests, please try again later.' } },
+});
+
+// General API limit (300 requests per 15 minutes per IP)
+const generalLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max:      300,
+  message:  { success: false, error: { code: 'RATE_LIMITED', message: 'Too many requests, please try again later.' } },
+});
+
+app.use('/api/auth', authLimiter);
+app.use('/api', generalLimiter);
 
 // ── Health check (no auth) ────────────────────────────────────────────────────
 app.get('/health', (_req, res) => res.json({ status: 'ok', ts: new Date().toISOString() }));
@@ -68,7 +102,7 @@ app.use('/api/fulfillment',     fulfillmentRoutes);
 app.use('/api/subscriptions',   subscriptionRoutes);
 app.use('/api/billing',         billingRoutes);
 app.use('/api/invoices',        invoiceRoutes);
-app.use('/api/payments',        paymentRoutes);
+// /api/payments already mounted above (before json parser for webhook)
 app.use('/api/portal',          portalRoutes);
 app.use('/api/deal-health',     dealHealthRoutes);
 app.use('/api/reports',         reportRoutes);
@@ -90,12 +124,10 @@ httpServer.listen(PORT, () => {
   console.log(`[server] DealFlow360 backend running on port ${PORT} (${NODE_ENV})`);
   console.log(`[server] Socket.io attached`);
 
-  // Register cron jobs after server is up
   scheduleMonthlyBilling();
   scheduleStalledDealDetection();
 });
 
-// Graceful shutdown
 process.on('SIGTERM', () => {
   console.log('[server] SIGTERM received — shutting down gracefully');
   httpServer.close(() => {

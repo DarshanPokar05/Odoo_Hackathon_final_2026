@@ -181,13 +181,43 @@ _Implementation: `src/modules/upsell/`_
 
 _Implementation: `src/modules/warehouses/`_
 
-| Method | Path                       | Auth | Roles                         | Description |
-|--------|----------------------------|------|-------------------------------|-------------|
-| GET    | `/api/warehouses`          | JWT  | ADMIN, SALES_MANAGER, FINANCE | List warehouses with stock levels |
-| GET    | `/api/warehouses/:id`      | JWT  | ADMIN, SALES_MANAGER, FINANCE | Get warehouse |
-| POST   | `/api/warehouses`          | JWT  | ADMIN                         | Create warehouse |
-| PUT    | `/api/warehouses/:id`      | JWT  | ADMIN                         | Update warehouse |
-| DELETE | `/api/warehouses/:id`      | JWT  | ADMIN                         | Delete warehouse |
+> Stock-level sub-routes live under each warehouse's `:id`. All stock operations go through the warehouse owner resource.
+
+| Method | Path                                  | Auth | Roles                                              | Description |
+|--------|---------------------------------------|------|----------------------------------------------------|-------------|
+| GET    | `/api/warehouses`                     | JWT  | ADMIN, SALES_MANAGER, FINANCE, SALES_REP           | List all warehouses, each with their full `stockLevels` array (includes product name/unit) |
+| GET    | `/api/warehouses/:id`                 | JWT  | ADMIN, SALES_MANAGER, FINANCE, SALES_REP           | Get single warehouse with stock levels |
+| POST   | `/api/warehouses`                     | JWT  | ADMIN                                              | Create warehouse. Body: `{ name, location?, shippingCostWeight? }` |
+| PUT    | `/api/warehouses/:id`                 | JWT  | ADMIN                                              | Update warehouse fields (all optional) |
+| DELETE | `/api/warehouses/:id`                 | JWT  | ADMIN                                              | Delete warehouse |
+| GET    | `/api/warehouses/:id/stock`           | JWT  | ADMIN, SALES_MANAGER, FINANCE, SALES_REP           | List all StockLevel rows for this warehouse |
+| PUT    | `/api/warehouses/:id/stock`           | JWT  | ADMIN, FINANCE                                     | Upsert (set absolute values) a StockLevel. Body: `{ productId, onHand, reserved?, reorderPoint?, reorderQty? }` |
+| POST   | `/api/warehouses/:id/stock/adjust`    | JWT  | ADMIN, FINANCE                                     | Apply a signed delta to `onHand`. Body: `{ productId, delta, reason }`. Positive = restock, negative = drawdown. Rejects if result < 0 or < reserved. |
+
+**Stock adjust notes:**
+- `delta` is a signed integer — pass `-10` to remove 10 units, `+20` to add 20
+- `reason` is required for audit trail
+- On any stock change: emits `STOCK_UPDATED` to all internal role rooms and runs a backorder consolidation check (emits `BACKORDER_COVERABLE` if newly sufficient stock covers an open BackorderItem)
+
+**Response shape for StockLevel:**
+```json
+{
+  "id": "uuid",
+  "warehouseId": "uuid",
+  "productId": "uuid",
+  "product": { "id": "uuid", "name": "string", "unit": "string" },
+  "onHand": 100,
+  "reserved": 20,
+  "reorderPoint": 10,
+  "reorderQty": 50
+}
+```
+
+### Socket.io Events
+
+| Event           | Direction     | Payload                                                                              | Description |
+|-----------------|---------------|--------------------------------------------------------------------------------------|-------------|
+| `STOCK_UPDATED` | Server→Client | `{ warehouseId, productId, onHand, reserved, available }` | Fires after every setStock or adjustStock. Pushed to role:ADMIN, role:SALES_MANAGER, role:FINANCE — Screen 7 stock table patches in-place without a refetch. |
 
 ---
 
@@ -195,13 +225,123 @@ _Implementation: `src/modules/warehouses/`_
 
 _Implementation: `src/modules/fulfillment/`_
 
-| Method | Path                        | Auth | Roles                         | Description |
-|--------|-----------------------------|------|-------------------------------|-------------|
-| GET    | `/api/fulfillment`          | JWT  | ADMIN, SALES_MANAGER, FINANCE | List fulfillment splits |
-| GET    | `/api/fulfillment/:id`      | JWT  | ADMIN, SALES_MANAGER, FINANCE | Get fulfillment split |
-| POST   | `/api/fulfillment`          | JWT  | ADMIN, SALES_MANAGER          | Create fulfillment split |
-| PUT    | `/api/fulfillment/:id`      | JWT  | ADMIN, SALES_MANAGER          | Update split |
-| DELETE | `/api/fulfillment/:id`      | JWT  | ADMIN                         | Delete split |
+> The auto-split algorithm (Global Constraint 3) is a pure function in `src/utils/computeFulfillmentSplit.js`. It prefers fewer warehouses (single-warehouse full-coverage first), then lowest `shippingCostWeight` to break ties. All commit paths re-validate live stock inside a Prisma transaction.
+
+| Method | Path                                                | Auth | Roles                                    | Description |
+|--------|-----------------------------------------------------|------|------------------------------------------|-------------|
+| GET    | `/api/fulfillment`                                  | JWT  | ADMIN, SALES_MANAGER, FINANCE, SALES_REP | List orders with status in `[PENDING_FULFILLMENT, SPLIT_PENDING, PARTIALLY_FULFILLED, BACKORDERED]`, including committed splits and open backorders |
+| GET    | `/api/fulfillment/:orderId`                         | JWT  | ADMIN, SALES_MANAGER, FINANCE, SALES_REP | Fulfillment detail for one order. Returns `suggestedSplit` (freshly computed), `committedSplits`, `openBackorders`, `order.lines` |
+| POST   | `/api/fulfillment/:orderId/suggest-split`           | JWT  | ADMIN, SALES_MANAGER, FINANCE, SALES_REP | Preview auto-computed split against live stock — **no commit, no stock reservation** |
+| POST   | `/api/fulfillment/:orderId/accept-split`            | JWT  | ADMIN, SALES_MANAGER, FINANCE            | Commit the auto-computed split. Decrements `onHand`/increments `reserved` per warehouse. Creates `BackorderItem` rows for any shortfall. Advances `Order.status`. |
+| POST   | `/api/fulfillment/:orderId/override`                | JWT  | ADMIN, SALES_MANAGER, FINANCE            | Commit a manually supplied split. Same stock validation as auto path. Body: `{ splits: [{ warehouseId, productId, qty }] }` |
+| POST   | `/api/fulfillment/backorders/:backorderId/consolidate` | JWT | ADMIN, SALES_MANAGER, FINANCE          | Resolve a backorder now that stock is available. Runs auto-split for the remaining qty, commits it, marks BackorderItem resolved. If partial, creates a new smaller backorder. |
+
+**Route declaration note:** `/backorders/:backorderId/consolidate` is declared **before** `/:orderId` in the router so Express does not mistakenly treat the literal string `"backorders"` as an orderId.
+
+**`GET /api/fulfillment/:orderId` response shape:**
+```json
+{
+  "order": {
+    "id": "uuid",
+    "status": "PENDING_FULFILLMENT",
+    "confirmedAt": "ISO-8601",
+    "customer": { "id": "uuid", "companyName": "string" },
+    "lines": [
+      {
+        "id": "uuid",
+        "productId": "uuid",
+        "product": { "id": "uuid", "name": "string", "unit": "string" },
+        "quantity": 10,
+        "unitPrice": "99.00",
+        "discountPercent": "5.00",
+        "lineType": "ONE_TIME"
+      }
+    ]
+  },
+  "suggestedSplit": [
+    { "warehouseId": "uuid", "productId": "uuid", "qty": 10, "estimatedCost": 10.0 }
+  ],
+  "suggestedBackorders": [
+    { "productId": "uuid", "qtyPending": 3 }
+  ],
+  "committedSplits": [
+    {
+      "id": "uuid",
+      "warehouseId": "uuid",
+      "warehouse": { "id": "uuid", "name": "string", "shippingCostWeight": "1.5" },
+      "productId": "uuid",
+      "product": { "id": "uuid", "name": "string", "unit": "string" },
+      "qtyFulfilled": 10,
+      "estimatedCost": "15.00"
+    }
+  ],
+  "openBackorders": [
+    {
+      "id": "uuid",
+      "productId": "uuid",
+      "product": { "id": "uuid", "name": "string" },
+      "qtyPending": 3,
+      "resolvedAt": null
+    }
+  ]
+}
+```
+
+**`POST /api/fulfillment/:orderId/override` body:**
+```json
+{
+  "splits": [
+    { "warehouseId": "uuid", "productId": "uuid", "qty": 8 },
+    { "warehouseId": "uuid", "productId": "uuid", "qty": 2 }
+  ]
+}
+```
+- Total qty per productId across all split rows must not exceed the ordered quantity for that product
+- Any shortfall auto-creates BackorderItem rows
+- All warehouse+product combinations are live-validated against available stock inside the transaction
+
+**Order status progression:**
+
+| Status                | Meaning |
+|-----------------------|---------|
+| `PENDING_FULFILLMENT` | Order confirmed, split not yet run |
+| `BACKORDERED`         | Split committed but ≥1 BackorderItem unresolved |
+| `SPLIT_ACCEPTED`      | All lines split and reserved; no open backorders |
+
+### Socket.io Events
+
+| Event                  | Direction     | Payload                                                                                 | Description |
+|------------------------|---------------|-----------------------------------------------------------------------------------------|-------------|
+| `BACKORDER_COVERABLE`  | Server→Client | `{ orderId, backorderId, productId, qtyPending, totalAvailable }`                       | Fires after a stock change when total available stock now covers an open backorder. Pushed to role:ADMIN, role:SALES_MANAGER, role:FINANCE. Screen 8 uses this to auto-surface the "Consolidate Remaining Backorder" banner without a page refresh. |
+| `FULFILLMENT_UPDATED`  | Server→Client | `{ orderId, status, splits: [...], backorders: [...] }`                                 | Fires after accept-split, override, or consolidate commit. Pushed to role:ADMIN, role:SALES_MANAGER, role:FINANCE, and `order:{orderId}`. Screen 7 order list and Screen 8 detail both update from this. |
+
+---
+
+## Track A → Track B Handoff Event
+
+> **Coordination contract between Dev 1 (Quotations/Approvals) and Dev 2 (Fulfillment).**
+>
+> When a quotation is confirmed (either directly if no approval required, or after the final approval step clears), Track A must create an `Order` record and emit the event below so Track B's fulfillment flow can begin.
+
+**Trigger:** `POST /api/quotations/:id/confirm` success (or final approval action that auto-confirms)
+
+**Action Track A must perform:**
+1. Create `Order` record: `{ quotationId, status: "PENDING_FULFILLMENT", confirmedAt: now() }`
+2. Call `realtime.emitFulfillmentUpdated({ orderId, status: "PENDING_FULFILLMENT", splits: [], backorders: [] })`
+
+**Socket.io event pushed:** `FULFILLMENT_UPDATED` (see Fulfillment section above)
+
+**Payload shape Track A must emit:**
+```json
+{
+  "orderId": "uuid",
+  "status": "PENDING_FULFILLMENT",
+  "splits": [],
+  "backorders": []
+}
+```
+
+Track B's fulfillment list query picks up new `PENDING_FULFILLMENT` orders from this event — no polling required.
 
 ---
 
@@ -346,11 +486,12 @@ _Implementation: `src/modules/activityLogs/`_
 
 ## Socket.io — Room Reference
 
-| Room                    | Who joins              | Events received |
-|-------------------------|------------------------|-----------------|
-| `user:{userId}`         | Every authenticated user | Personal notifications, approval actions, quotation updates |
-| `role:{role}`           | Every authenticated user | Role-wide broadcasts (e.g. approval queue, deal health flags) |
-| `customer:{customerId}` | CUSTOMER-role only     | Portal quotation/negotiation/invoice updates |
+| Room                    | Who joins                   | Events received |
+|-------------------------|-----------------------------|-----------------|
+| `user:{userId}`         | Every authenticated user    | Personal notifications, approval actions, quotation updates |
+| `role:{role}`           | Every authenticated user    | Role-wide broadcasts (e.g. approval queue, deal health flags, stock updates, fulfillment updates) |
+| `customer:{customerId}` | CUSTOMER-role only          | Portal quotation/negotiation/invoice updates |
+| `order:{orderId}`       | Not auto-joined — targeted by server when emitting fulfillment updates | `FULFILLMENT_UPDATED` — allows Track A quotation screens to react to order status changes without joining a role room |
 
 ---
 

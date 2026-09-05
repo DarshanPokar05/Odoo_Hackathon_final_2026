@@ -2,64 +2,80 @@
 
 /**
  * Proration Calculator
- * ────────────────────
- * Handles daily proration and cancellation credit/refund amounts for subscriptions.
+ * =====================
+ * Pure, side-effect-free functions for mid-cycle billing changes.
  *
- * All Decimal inputs are accepted as numbers or strings (compatible with Prisma Decimal).
+ * BUSINESS RULE (Global Constraint 4):
+ *   Mid-cycle quantity/plan change proration =
+ *     (newValue - oldValue) × (daysRemainingInCycle / totalDaysInCycle)
+ *
+ *   Where:
+ *     newValue  = the new monthly billing amount (unitPrice × newQty)
+ *     oldValue  = the old monthly billing amount (unitPrice × oldQty)
+ *     daysRemainingInCycle = cycleEnd - changeDate  (inclusive of change day)
+ *     totalDaysInCycle     = cycleEnd - cycleStart
+ *
+ * WORKED EXAMPLES:
+ *   Cycle: Jan 1 → Jan 31 (31 days). Change on Jan 16 (16 days remaining incl.).
+ *   Old: 5 seats × $299 = $1495/mo. New: 8 seats × $299 = $2392/mo.
+ *   Delta = (2392 - 1495) × (16/31) = $897 × 0.516 = ~$463.10  (increase)
+ *
+ *   For a decrease (downgrade):
+ *   Old: 8 seats × $299 = $2392. New: 3 seats × $299 = $897.
+ *   Delta = (897 - 2392) × (16/31) = -$1495 × 0.516 = ~-$771.61  (credit)
  */
 
 /**
- * Calculate the prorated amount for a partial billing cycle.
+ * Compute the proration amount for a mid-cycle change.
  *
  * @param {object} params
- * @param {number|string} params.monthlyAmount  — full cycle amount
- * @param {Date}          params.cycleStart     — start of the billing cycle
- * @param {Date}          params.cycleEnd       — end of the billing cycle
- * @param {Date}          params.activationDate — date the subscription became active (or was changed)
- * @returns {number} prorated amount, rounded to 2 decimal places
+ * @param {number} params.oldMonthlyAmount  — current period charge (qty × unitPrice)
+ * @param {number} params.newMonthlyAmount  — new period charge after change
+ * @param {Date}   params.changeDate        — the date the change takes effect
+ * @param {Date}   params.cycleStart        — start of the current billing cycle
+ * @param {Date}   params.cycleEnd          — end of the current billing cycle (exclusive)
+ *
+ * @returns {{
+ *   prorationAmount:    number,   — positive = charge extra, negative = credit back
+ *   daysRemaining:      number,
+ *   totalDays:          number,
+ *   prorationFraction:  number,
+ * }}
  */
-function dailyProrate({ monthlyAmount, cycleStart, cycleEnd, activationDate }) {
-  const totalDays = daysBetween(cycleStart, cycleEnd);
-  const activeDays = daysBetween(activationDate, cycleEnd);
-  if (totalDays <= 0) return 0;
-  const ratio = Math.min(Math.max(activeDays, 0), totalDays) / totalDays;
-  return round2(Number(monthlyAmount) * ratio);
+function computeProration({ oldMonthlyAmount, newMonthlyAmount, changeDate, cycleStart, cycleEnd }) {
+  const MS_PER_DAY = 24 * 60 * 60 * 1000;
+
+  const totalDays     = Math.round((cycleEnd - cycleStart) / MS_PER_DAY);
+  const daysRemaining = Math.max(0, Math.round((cycleEnd - changeDate) / MS_PER_DAY));
+
+  if (totalDays <= 0) {
+    return { prorationAmount: 0, daysRemaining: 0, totalDays: 0, prorationFraction: 0 };
+  }
+
+  const prorationFraction = daysRemaining / totalDays;
+  const delta             = Number(newMonthlyAmount) - Number(oldMonthlyAmount);
+  const prorationAmount   = Math.round(delta * prorationFraction * 100) / 100;
+
+  return { prorationAmount, daysRemaining, totalDays, prorationFraction };
 }
 
 /**
- * Calculate the refund amount for unused days on cancellation.
+ * Advance a date by one billing interval.
+ * Exported here so the billing job and subscription service share the same logic.
  *
- * @param {object} params
- * @param {number|string} params.monthlyAmount  — full cycle amount already paid
- * @param {Date}          params.cycleStart
- * @param {Date}          params.cycleEnd
- * @param {Date}          params.cancelDate     — date of cancellation
- * @param {string}        params.rule           — "REFUND_UNUSED_DAYS" | "NO_REFUND" | "CREDIT_NOTE"
- * @returns {{ refundAmount: number, creditNoteAmount: number }}
+ * @param {Date}   date
+ * @param {string} interval — "MONTHLY" | "QUARTERLY" | "YEARLY"
+ * @returns {Date}
  */
-function cancellationAmount({ monthlyAmount, cycleStart, cycleEnd, cancelDate, rule }) {
-  if (rule === 'NO_REFUND') return { refundAmount: 0, creditNoteAmount: 0 };
-
-  const totalDays   = daysBetween(cycleStart, cycleEnd);
-  const unusedDays  = daysBetween(cancelDate, cycleEnd);
-  if (totalDays <= 0 || unusedDays <= 0) return { refundAmount: 0, creditNoteAmount: 0 };
-
-  const ratio  = Math.min(unusedDays, totalDays) / totalDays;
-  const amount = round2(Number(monthlyAmount) * ratio);
-
-  if (rule === 'CREDIT_NOTE') return { refundAmount: 0, creditNoteAmount: amount };
-  return { refundAmount: amount, creditNoteAmount: 0 }; // REFUND_UNUSED_DAYS
+function advanceByInterval(date, interval) {
+  const d = new Date(date);
+  switch (interval) {
+    case 'QUARTERLY': d.setMonth(d.getMonth() + 3);    break;
+    case 'YEARLY':    d.setFullYear(d.getFullYear() + 1); break;
+    case 'MONTHLY':
+    default:          d.setMonth(d.getMonth() + 1);
+  }
+  return d;
 }
 
-// ── Helpers ──────────────────────────────────────────────────────────────────
-
-function daysBetween(a, b) {
-  const msPerDay = 1000 * 60 * 60 * 24;
-  return Math.round((new Date(b) - new Date(a)) / msPerDay);
-}
-
-function round2(n) {
-  return Math.round(n * 100) / 100;
-}
-
-module.exports = { dailyProrate, cancellationAmount };
+module.exports = { computeProration, advanceByInterval };

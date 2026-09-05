@@ -1,28 +1,72 @@
 ﻿'use strict';
 
-const prisma = require('../../config/prisma');
+/**
+ * Deal Health Service
+ * ===================
+ * Provides list/resolve/escalate for DealHealthFlags.
+ * The flag *creation* happens in the stalledDealDetection job.
+ * This service handles reading + acting on existing flags.
+ */
 
-// TODO: add Zod validation, business logic, and emitToRoom calls in the relevant phase.
+const { z }       = require('zod');
+const prisma      = require('../../config/prisma');
+const { logAudit } = require('../../utils/logAudit');
+const realtime    = require('../../realtime/index');
 
-const MODEL = 'DealHealthFlag';
-const field = MODEL.charAt(0).toLowerCase() + MODEL.slice(1);
-
-exports.list = async (query, user) => {
-  return prisma[field].findMany();
+const FLAG_INCLUDE = {
+  include: {
+    quotation: {
+      include: { customer: { select: { id: true, companyName: true } } },
+    },
+  },
 };
 
-exports.getOne = async (id, user) => {
-  return prisma[field].findUniqueOrThrow({ where: { id } });
-};
+async function list(query, user) {
+  const where = {};
+  if (query?.type)     where.type     = query.type;
+  if (query?.resolved !== undefined)
+    where.resolved = query.resolved === 'true';
 
-exports.create = async (body, user) => {
-  return prisma[field].create({ data: body });
-};
+  return prisma.dealHealthFlag.findMany({
+    where,
+    ...FLAG_INCLUDE,
+    orderBy: { createdAt: 'desc' },
+  });
+}
 
-exports.update = async (id, body, user) => {
-  return prisma[field].update({ where: { id }, data: body });
-};
+async function getOne(id, user) {
+  return prisma.dealHealthFlag.findUniqueOrThrow({ where: { id }, ...FLAG_INCLUDE });
+}
 
-exports.remove = async (id, user) => {
-  return prisma[field].delete({ where: { id } });
-};
+async function resolve(id, user) {
+  const flag = await prisma.dealHealthFlag.update({
+    where: { id },
+    data:  { resolved: true },
+    ...FLAG_INCLUDE,
+  });
+
+  await logAudit({
+    userId: user.userId, action: 'DEAL_HEALTH_FLAG_RESOLVED',
+    entityType: 'DealHealthFlag', entityId: id,
+  });
+
+  return flag;
+}
+
+async function escalate(id, body, user) {
+  const { note } = z.object({ note: z.string().min(1) }).parse(body);
+  const flag = await prisma.dealHealthFlag.findUniqueOrThrow({ where: { id }, ...FLAG_INCLUDE });
+
+  await logAudit({
+    userId: user.userId, action: 'DEAL_HEALTH_FLAG_ESCALATED',
+    entityType: 'DealHealthFlag', entityId: id,
+    details: { note, flagType: flag.type, quotationId: flag.quotationId },
+  });
+
+  // Notify admin + managers
+  realtime.emitDealHealthFlag({ ...flag, escalated: true, escalatedNote: note });
+
+  return { id, escalated: true };
+}
+
+module.exports = { list, getOne, resolve, escalate };

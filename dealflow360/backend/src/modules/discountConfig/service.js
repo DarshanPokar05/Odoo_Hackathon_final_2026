@@ -11,8 +11,8 @@ const tierCeilingUpdateSchema = z.object({
 });
 
 const approvalRuleSchema = z.object({
-  minScore:      z.number().min(0),
-  maxScore:      z.number().positive().nullable().optional(),
+  minScore:      z.coerce.number().min(0),
+  maxScore:      z.union([z.coerce.number().positive(), z.null()]).optional().default(null),
   requiredLevel: z.enum(['NONE', 'SALES_MANAGER', 'SALES_MANAGER_THEN_FINANCE']),
 });
 

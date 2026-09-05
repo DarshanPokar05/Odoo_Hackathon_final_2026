@@ -1,11 +1,19 @@
 ﻿'use strict';
+
 const router = require('express').Router();
 const { requireAuth } = require('../../middleware/auth');
 const { requireRole } = require('../../middleware/rbac');
 const ctrl = require('./controller');
-router.get('/',       requireAuth, requireRole('ADMIN','SALES_MANAGER','FINANCE'), ctrl.list);
-router.get('/:id',    requireAuth, requireRole('ADMIN','SALES_MANAGER','FINANCE'), ctrl.getOne);
-router.post('/',      requireAuth, requireRole('ADMIN','SALES_MANAGER','FINANCE'), ctrl.create);
-router.put('/:id',    requireAuth, requireRole('ADMIN','SALES_MANAGER','FINANCE'), ctrl.update);
-router.delete('/:id', requireAuth, requireRole('ADMIN'), ctrl.remove);
+
+const APPROVERS = ['ADMIN', 'SALES_MANAGER', 'FINANCE'];
+
+// List pending approval steps (scoped to role in service layer)
+router.get('/',    requireAuth, requireRole(...APPROVERS), ctrl.list);
+router.get('/:id', requireAuth, requireRole(...APPROVERS), ctrl.getOne);
+
+// Approval workflow actions
+router.patch('/:id/approve',          requireAuth, requireRole(...APPROVERS), ctrl.approve);
+router.patch('/:id/reject',           requireAuth, requireRole(...APPROVERS), ctrl.reject);
+router.patch('/:id/return-for-revision', requireAuth, requireRole(...APPROVERS), ctrl.returnForRevision);
+
 module.exports = router;

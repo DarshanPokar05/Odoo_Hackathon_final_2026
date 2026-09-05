@@ -17,7 +17,8 @@ const TIERS     = ['BRONZE', 'SILVER', 'GOLD'];
 const INTERVALS = ['MONTHLY', 'QUARTERLY', 'YEARLY'];
 
 export default function ProductDetailPage() {
-  const { id }       = useParams();               // 'new' for create
+  const params       = useParams();
+  const id           = params.id || 'new';
   const isNew        = id === 'new';
   const navigate     = useNavigate();
   const queryClient  = useQueryClient();
@@ -32,7 +33,7 @@ export default function ProductDetailPage() {
     enabled:  !isNew,
   });
 
-  const { data: allRules = [] } = useQuery({
+  const { data: allRules } = useQuery({
     queryKey: ['priceLists', id],
     queryFn:  () => priceListsApi.list({ productId: isNew ? undefined : id }),
     enabled:  !isNew,
@@ -71,7 +72,9 @@ export default function ProductDetailPage() {
   }, [existing]);
 
   useEffect(() => {
-    setPriceRules(allRules.map((r) => ({ ...r, _key: r.id })));
+    if (allRules) {
+      setPriceRules(allRules.map((r) => ({ ...r, _key: r.id })));
+    }
   }, [allRules]);
 
   // ── Mutations ────────────────────────────────────────────────────────────
@@ -105,7 +108,11 @@ export default function ProductDetailPage() {
     setError(''); setSucc('');
     const cleanVariants = variants
       .filter((v) => v.attributeName.trim() && v.value.trim())
-      .map(({ _key, id: vid, ...rest }) => ({ ...rest, ...(vid ? { id: vid } : {}) }));
+      .map(({ _key, id: vid, extraPrice, ...rest }) => ({
+        ...rest,
+        extraPrice: parseFloat(extraPrice || 0),
+        ...(vid ? { id: vid } : {})
+      }));
 
     saveMutation.mutate({
       ...form,

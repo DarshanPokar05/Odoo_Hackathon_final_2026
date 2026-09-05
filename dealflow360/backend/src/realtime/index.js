@@ -104,6 +104,64 @@ function emitNegotiationMessage({ repId, customerId, message }) {
   emitToRoom(`customer:${customerId}`, 'NEGOTIATION_MESSAGE', message);
 }
 
+// ── Fulfillment & stock events ────────────────────────────────────────────────
+
+/**
+ * Broadcast that a warehouse's stock level changed.
+ * Internal roles (ADMIN, SALES_MANAGER, FINANCE) all need the live stock table
+ * on Screen 7 to update without a page refresh.
+ *
+ * @param {object} payload
+ * @param {string} payload.warehouseId
+ * @param {string} payload.productId
+ * @param {number} payload.onHand
+ * @param {number} payload.reserved
+ * @param {number} payload.available   — onHand - reserved, pre-computed for the client
+ */
+function emitStockUpdated(payload) {
+  emitToRoom('role:ADMIN',          'STOCK_UPDATED', payload);
+  emitToRoom('role:SALES_MANAGER',  'STOCK_UPDATED', payload);
+  emitToRoom('role:FINANCE',        'STOCK_UPDATED', payload);
+}
+
+/**
+ * Tell fulfillment operators that stock has been restocked to a level that can
+ * now cover a previously-backordered quantity.  The frontend shows the
+ * "Consolidate Remaining Backorder" banner in real-time on Screen 8.
+ *
+ * @param {object} payload
+ * @param {string} payload.orderId
+ * @param {string} payload.backorderId
+ * @param {string} payload.productId
+ * @param {number} payload.qtyPending
+ * @param {number} payload.totalAvailable
+ */
+function emitBackorderCoverable(payload) {
+  emitToRoom('role:ADMIN',          'BACKORDER_COVERABLE', payload);
+  emitToRoom('role:SALES_MANAGER',  'BACKORDER_COVERABLE', payload);
+  emitToRoom('role:FINANCE',        'BACKORDER_COVERABLE', payload);
+}
+
+/**
+ * Notify that a fulfillment split was committed (accepted or overridden)
+ * or that a backorder was consolidated.
+ *
+ * @param {object} payload
+ * @param {string} payload.orderId
+ * @param {string} payload.status   — new Order status
+ * @param {Array}  payload.splits
+ * @param {Array}  payload.backorders
+ */
+function emitFulfillmentUpdated(payload) {
+  emitToRoom('role:ADMIN',          'FULFILLMENT_UPDATED', payload);
+  emitToRoom('role:SALES_MANAGER',  'FULFILLMENT_UPDATED', payload);
+  emitToRoom('role:FINANCE',        'FULFILLMENT_UPDATED', payload);
+  // Also push to the quotation room so Track A's dashboard reflects the status
+  if (payload.orderId) {
+    emitToRoom(`order:${payload.orderId}`, 'FULFILLMENT_UPDATED', payload);
+  }
+}
+
 // ── Generic room emit (escape hatch for modules with unusual needs) ───────────
 
 /**
@@ -122,5 +180,8 @@ module.exports = {
   emitApprovalActed,
   emitDealHealthFlag,
   emitNegotiationMessage,
+  emitStockUpdated,
+  emitBackorderCoverable,
+  emitFulfillmentUpdated,
   emitToRoomRaw,
 };

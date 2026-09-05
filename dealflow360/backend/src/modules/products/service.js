@@ -1,4 +1,4 @@
-﻿'use strict';
+'use strict';
 
 const { z }        = require('zod');
 const prisma       = require('../../config/prisma');
@@ -16,7 +16,7 @@ const variantSchema = z.object({
 const createSchema = z.object({
   name:           z.string().min(1).max(200).trim(),
   categoryId:     z.string().uuid(),
-  price:          z.number().positive(),
+  price:          z.number().min(0),
   unit:           z.string().min(1).max(50),
   taxPercent:     z.number().min(0).max(100).default(0),
   description:    z.string().max(2000).optional(),
@@ -95,11 +95,24 @@ async function update(id, body, userId) {
 }
 
 async function remove(id, userId) {
-  // Cascade: delete variants first (no cascadeDelete in schema)
+  // Prevent deletion if the product is already in use in fulfillment, backorders, or quotations
+  const inFulfillment = await prisma.fulfillmentSplit.count({ where: { productId: id } });
+  const inBackorders  = await prisma.backorderItem.count({ where: { productId: id } });
+  const inQuotations  = await prisma.quotationLine.count({ where: { productId: id } });
+  
+  if (inFulfillment > 0 || inBackorders > 0 || inQuotations > 0) {
+    const e = new Error('Cannot delete product: it is already part of a quotation, order, or backorder.');
+    e.statusCode = 400; throw e;
+  }
+
+  // Cascade: delete variants, stock levels, and price rules first
   await prisma.$transaction([
     prisma.productVariant.deleteMany({ where: { productId: id } }),
+    prisma.priceListRule.deleteMany({ where: { productId: id } }),
+    prisma.stockLevel.deleteMany({ where: { productId: id } }),
     prisma.product.delete({ where: { id } }),
   ]);
+  
   await logAudit({ userId, action: 'PRODUCT_DELETED', entityType: 'Product', entityId: id });
   return { id };
 }
