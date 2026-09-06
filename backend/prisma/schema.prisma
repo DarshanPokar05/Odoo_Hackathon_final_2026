@@ -1,0 +1,340 @@
+// DealFlow360 — Prisma Schema
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ─── Enums ────────────────────────────────────────────────────────────────────
+
+enum Role {
+  ADMIN
+  SALES_REP
+  SALES_MANAGER
+  FINANCE
+  CUSTOMER
+}
+
+enum Tier {
+  BRONZE
+  SILVER
+  GOLD
+}
+
+// ─── Users & Customers ────────────────────────────────────────────────────────
+
+model User {
+  id                 String    @id @default(uuid())
+  name               String
+  email              String    @unique
+  passwordHash       String
+  role               Role      @default(SALES_REP)
+  mustChangePassword Boolean   @default(false)
+  customerId         String?   @unique
+  customer           Customer? @relation(fields: [customerId], references: [id])
+  createdAt          DateTime  @default(now())
+}
+
+model Customer {
+  id          String      @id @default(uuid())
+  companyName String
+  tier        Tier        @default(BRONZE)
+  realEmail   String
+  portalUser  User?
+  quotations  Quotation[]
+  createdAt   DateTime    @default(now())
+}
+
+// ─── Product Catalogue ────────────────────────────────────────────────────────
+
+model ProductCategory {
+  id                 String    @id @default(uuid())
+  name               String    @unique
+  maxDiscountPercent Decimal
+  products           Product[]
+}
+
+model Product {
+  id                String             @id @default(uuid())
+  name              String
+  categoryId        String
+  category          ProductCategory    @relation(fields: [categoryId], references: [id])
+  price             Decimal
+  unit              String
+  taxPercent        Decimal
+  description       String?
+  isSubscription    Boolean            @default(false)
+  variants          ProductVariant[]
+  stockLevels       StockLevel[]
+  fulfillmentSplits FulfillmentSplit[]
+  backorderItems    BackorderItem[]
+  subscriptionPlans SubscriptionPlan[]
+  quotationLines    QuotationLine[]
+  createdAt         DateTime           @default(now())
+}
+
+model ProductVariant {
+  id            String  @id @default(uuid())
+  productId     String
+  product       Product @relation(fields: [productId], references: [id])
+  attributeName String
+  value         String
+  extraPrice    Decimal @default(0)
+}
+
+// ─── Pricing & Discounts ──────────────────────────────────────────────────────
+
+model PriceListRule {
+  id        String  @id @default(uuid())
+  tier      Tier
+  currency  String  @default("USD")
+  ruleType  String  // "FIXED" | "PERCENT_OFF_BASE"
+  value     Decimal
+  productId String?
+}
+
+model TierDiscountCeiling {
+  id                 String  @id @default(uuid())
+  tier               Tier    @unique
+  maxDiscountPercent Decimal
+}
+
+// ─── Approval Chain Config ────────────────────────────────────────────────────
+
+model ApprovalChainRule {
+  id            String   @id @default(uuid())
+  minScore      Decimal
+  maxScore      Decimal?
+  requiredLevel String   // "NONE" | "SALES_MANAGER" | "SALES_MANAGER_THEN_FINANCE"
+}
+
+// ─── Warehouses & Inventory ───────────────────────────────────────────────────
+
+model Warehouse {
+  id                 String             @id @default(uuid())
+  name               String
+  location           String?
+  shippingCostWeight Decimal            @default(1)
+  stockLevels        StockLevel[]
+  fulfillmentSplits  FulfillmentSplit[]
+}
+
+model StockLevel {
+  id           String    @id @default(uuid())
+  warehouseId  String
+  warehouse    Warehouse @relation(fields: [warehouseId], references: [id])
+  productId    String
+  product      Product   @relation(fields: [productId], references: [id])
+  onHand       Int
+  reserved     Int       @default(0)
+  reorderPoint Int       @default(0)
+  reorderQty   Int       @default(0)
+
+  @@unique([warehouseId, productId])
+}
+
+// ─── Subscription Plans ───────────────────────────────────────────────────────
+
+model SubscriptionPlan {
+  id               String         @id @default(uuid())
+  name             String
+  productId        String
+  product          Product        @relation(fields: [productId], references: [id])
+  interval         String         // "MONTHLY" | "QUARTERLY" | "YEARLY"
+  prorationRule    String         @default("DAILY_PRORATE")
+  cancellationRule String         @default("REFUND_UNUSED_DAYS")
+  subscriptions    Subscription[]
+}
+
+// ─── Upsell Rules ─────────────────────────────────────────────────────────────
+
+model UpsellRule {
+  id                 String  @id @default(uuid())
+  primaryProductId   String
+  suggestedProductId String
+  minMarginPercent   Decimal
+  isPromoted         Boolean @default(false)
+}
+
+// ─── Quotations & Approval Workflow ──────────────────────────────────────────
+
+model Quotation {
+  id                  String               @id @default(uuid())
+  customerId          String
+  customer            Customer             @relation(fields: [customerId], references: [id])
+  repId               String
+  status              String               @default("DRAFT")
+  blendedRiskScore    Decimal              @default(0)
+  lines               QuotationLine[]
+  approvalSteps       ApprovalStep[]
+  negotiationMessages NegotiationMessage[]
+  dealHealthFlags     DealHealthFlag[]
+  order               Order?
+  lastActivityAt      DateTime             @default(now())
+  createdAt           DateTime             @default(now())
+}
+
+model QuotationLine {
+  id                       String    @id @default(uuid())
+  quotationId              String
+  quotation                Quotation @relation(fields: [quotationId], references: [id])
+  productId                String
+  product                  Product   @relation(fields: [productId], references: [id])
+  quantity                 Int
+  unitPrice                Decimal
+  discountPercent          Decimal   @default(0)
+  lineType                 String    // "ONE_TIME" | "RECURRING"
+  subscriptionPlanId       String?
+  effectiveCeilingSnapshot Decimal
+  pointsOverSnapshot       Decimal   @default(0)
+}
+
+model ApprovalStep {
+  id          String    @id @default(uuid())
+  quotationId String
+  quotation   Quotation @relation(fields: [quotationId], references: [id])
+  level       String    // "SALES_MANAGER" | "FINANCE"
+  status      String    @default("PENDING")
+  actedById   String?
+  actedAt     DateTime?
+  reason      String?
+  order       Int
+}
+
+model NegotiationMessage {
+  id          String    @id @default(uuid())
+  quotationId String
+  quotation   Quotation @relation(fields: [quotationId], references: [id])
+  senderType  String    // "CUSTOMER" | "REP"
+  message     String
+  lineId      String?
+  createdAt   DateTime  @default(now())
+}
+
+// ─── Orders & Fulfillment ─────────────────────────────────────────────────────
+
+model Order {
+  id                String             @id @default(uuid())
+  quotationId       String             @unique
+  quotation         Quotation          @relation(fields: [quotationId], references: [id])
+  status            String             @default("PENDING_FULFILLMENT")
+  confirmedAt       DateTime           @default(now())
+  fulfillmentSplits FulfillmentSplit[]
+  backorderItems    BackorderItem[]
+  invoices          Invoice[]
+  subscriptions     Subscription[]
+}
+
+model FulfillmentSplit {
+  id            String    @id @default(uuid())
+  orderId       String
+  order         Order     @relation(fields: [orderId], references: [id])
+  warehouseId   String
+  warehouse     Warehouse @relation(fields: [warehouseId], references: [id])
+  productId     String
+  product       Product   @relation(fields: [productId], references: [id])
+  qtyFulfilled  Int
+  estimatedCost Decimal
+}
+
+model BackorderItem {
+  id         String    @id @default(uuid())
+  orderId    String
+  order      Order     @relation(fields: [orderId], references: [id])
+  productId  String
+  product    Product   @relation(fields: [productId], references: [id])
+  qtyPending Int
+  resolvedAt DateTime?
+}
+
+// ─── Active Subscriptions ─────────────────────────────────────────────────────
+
+model Subscription {
+  id             String           @id @default(uuid())
+  orderId        String
+  order          Order            @relation(fields: [orderId], references: [id])
+  planId         String
+  plan           SubscriptionPlan @relation(fields: [planId], references: [id])
+  quantity       Int
+  status         String           @default("ACTIVE")
+  nextBillDate   DateTime
+  cycleStartDate DateTime
+  invoices       Invoice[]
+  creditNotes    CreditNote[]
+}
+
+// ─── Billing & Finance ────────────────────────────────────────────────────────
+
+model Invoice {
+  id             String        @id @default(uuid())
+  orderId        String?
+  order          Order?        @relation(fields: [orderId], references: [id])
+  subscriptionId String?
+  subscription   Subscription? @relation(fields: [subscriptionId], references: [id])
+  type           String        // "ONE_TIME" | "RECURRING"
+  amount         Decimal
+  status         String        @default("UNPAID")
+  dueDate        DateTime
+  pdfPath        String?
+  createdAt      DateTime      @default(now())
+  payments       Payment[]
+}
+
+model Payment {
+  id                String   @id @default(uuid())
+  invoiceId         String
+  invoice           Invoice  @relation(fields: [invoiceId], references: [id])
+  razorpayOrderId   String
+  razorpayPaymentId String?
+  razorpaySignature String?
+  amount            Decimal
+  status            String   @default("CREATED")
+  createdAt         DateTime @default(now())
+}
+
+model CreditNote {
+  id             String       @id @default(uuid())
+  subscriptionId String
+  subscription   Subscription @relation(fields: [subscriptionId], references: [id])
+  amount         Decimal
+  reason         String
+  createdAt      DateTime     @default(now())
+}
+
+// ─── Deal Health & Monitoring ─────────────────────────────────────────────────
+
+model DealHealthFlag {
+  id          String    @id @default(uuid())
+  quotationId String
+  quotation   Quotation @relation(fields: [quotationId], references: [id])
+  type        String    // "STALLED" | "DISCOUNT_ANOMALY" | "DELIVERY_SLIPPAGE"
+  detail      String
+  resolved    Boolean   @default(false)
+  createdAt   DateTime  @default(now())
+}
+
+// ─── Notifications & Audit ────────────────────────────────────────────────────
+
+model Notification {
+  id        String   @id @default(uuid())
+  userId    String
+  type      String
+  message   String
+  relatedId String?
+  isRead    Boolean  @default(false)
+  createdAt DateTime @default(now())
+}
+
+model ActivityLog {
+  id         String   @id @default(uuid())
+  userId     String?
+  action     String
+  entityType String
+  entityId   String
+  details    Json?
+  createdAt  DateTime @default(now())
+}
