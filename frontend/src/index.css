@@ -1,0 +1,107 @@
+/* Import Google Fonts */
+@import url('https://fonts.googleapis.com/css2?family=Sora:wght@400;500;600;700&family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap');
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* ── Design system CSS variables ─────────────────────────────────────────── */
+@layer base {
+  :root {
+    /* Light theme */
+    --bg:            #F7F7FB;
+    --surface:       #FFFFFF;
+    --surface-alt:   #EFEFF7;
+    --border:        #E2E2EE;
+    --text-primary:  #16162A;
+    --text-secondary:#5C5C74;
+    --accent-start:  #6D5EF0;
+    --accent-end:    #17C3B2;
+    --accent-solid:  #6D5EF0;
+  }
+
+  .dark {
+    /* Dark theme */
+    --bg:            #0E0E1A;
+    --surface:       #17172A;
+    --surface-alt:   #1F1F38;
+    --border:        #2A2A45;
+    --text-primary:  #EDEDFA;
+    --text-secondary:#9B9BB8;
+    --accent-start:  #8A7BFF;
+    --accent-end:    #2BE0CB;
+    --accent-solid:  #8A7BFF;
+  }
+
+  html {
+    font-family: 'Inter', sans-serif;
+  }
+
+  body {
+    background-color: var(--bg);
+    color: var(--text-primary);
+    @apply antialiased;
+  }
+
+  /* Visible keyboard focus ring — uses accent-solid */
+  *:focus-visible {
+    outline: 2px solid var(--accent-solid);
+    outline-offset: 2px;
+  }
+}
+
+/* ── Utility classes that use CSS variables ──────────────────────────────── */
+@layer components {
+  /* Surface cards */
+  .surface {
+    background-color: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 0.75rem;
+  }
+
+  .surface-alt {
+    background-color: var(--surface-alt);
+    border: 1px solid var(--border);
+    border-radius: 0.75rem;
+  }
+
+  /* Gradient accent — used for FlowMeter, badges, etc. */
+  .gradient-accent {
+    background: linear-gradient(90deg, var(--accent-start), var(--accent-end));
+  }
+
+  /* Flow glow — leading edge glow for FlowMeter */
+  .flow-glow {
+    box-shadow: 0 0 10px 2px rgba(109, 94, 240, 0.3);
+  }
+
+  /* Text styles */
+  .text-primary   { color: var(--text-primary); }
+  .text-secondary { color: var(--text-secondary); }
+
+  /* Display font for KPI numbers and headings */
+  .font-display { font-family: 'Sora', sans-serif; }
+  .font-mono-df { font-family: 'JetBrains Mono', monospace; font-variant-numeric: tabular-nums; }
+
+  /* Stage stripe colours — left-edge stripe on kanban cards */
+  .stage-draft       { border-left-color: #64748b; }
+  .stage-pending     { border-left-color: #d97706; }
+  .stage-approved    { border-left-color: #2563eb; }
+  .stage-negotiation { border-left-color: #7c3aed; }
+  .stage-confirmed   { border-left-color: #16a34a; }
+  .stage-rejected    { border-left-color: #dc2626; }
+
+  /* Page entrance stagger — applied via inline --delay CSS var */
+  .stagger-enter {
+    animation: fade-in-up 0.3s ease-out both;
+    animation-delay: var(--stagger-delay, 0ms);
+  }
+
+  /* Respect prefers-reduced-motion */
+  @media (prefers-reduced-motion: reduce) {
+    *, *::before, *::after {
+      animation-duration: 0.01ms !important;
+      transition-duration: 0.01ms !important;
+    }
+  }
+}
