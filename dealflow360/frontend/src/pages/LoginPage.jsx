@@ -210,15 +210,7 @@ export default function LoginPage() {
           </form>
         )}
 
-        {/* Footnotes per wireframe */}
-        <div className="mt-6 pt-4 border-t border-[var(--border)] space-y-1.5">
-          <p className="text-xs text-[var(--text-secondary)] text-center">
-            After login, internal users land on the Sales Dashboard. Customers land on their Quotation Portal.
-          </p>
-          <p className="text-xs text-[var(--text-secondary)] text-center italic">
-            Customer accounts are auto-provisioned when a quotation is created — not self-signed-up.
-          </p>
-        </div>
+
       </div>
     </div>
   );

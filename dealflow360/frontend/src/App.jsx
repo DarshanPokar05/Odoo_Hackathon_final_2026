@@ -5,7 +5,7 @@ import { useAuth } from './store/authContext.jsx';
 import AppLayout    from './components/AppLayout.jsx';
 import PortalLayout from './components/PortalLayout.jsx';
 
-// Auth pages (no layout)
+// Auth pages
 import LoginPage          from './pages/LoginPage.jsx';
 import ChangePasswordPage from './pages/ChangePasswordPage.jsx';
 
@@ -16,6 +16,7 @@ import ProductDetailPage     from './pages/ProductDetailPage.jsx';
 import DiscountConfigPage    from './pages/DiscountConfigPage.jsx';
 import FulfillmentListPage   from './pages/FulfillmentListPage.jsx';
 import FulfillmentDetailPage from './pages/FulfillmentDetailPage.jsx';
+import StockManagementPage   from './pages/StockManagementPage.jsx';
 import QuotationsListPage    from './pages/QuotationsListPage.jsx';
 import QuotationDetailPage   from './pages/QuotationDetailPage.jsx';
 import ApprovalsListPage     from './pages/ApprovalsListPage.jsx';
@@ -27,7 +28,7 @@ import InvoiceDetailPage     from './pages/InvoiceDetailPage.jsx';
 import DealHealthPage        from './pages/DealHealthPage.jsx';
 import ReportsPage           from './pages/ReportsPage.jsx';
 
-// Customer portal pages (separate layout)
+// Customer portal pages
 import PortalQuotationsPage  from './pages/portal/PortalQuotationsPage.jsx';
 import PortalNegotiationPage from './pages/portal/PortalNegotiationPage.jsx';
 
@@ -91,8 +92,9 @@ export default function App() {
         <Route path="approvals"     element={<ApprovalsListPage />} />
         <Route path="approvals/:id" element={<ApprovalDetailPage />} />
 
-        {/* Fulfillment */}
+        {/* Fulfillment — static 'stock' MUST come before :orderId wildcard */}
         <Route path="fulfillment"          element={<FulfillmentListPage />} />
+        <Route path="fulfillment/stock"    element={<StockManagementPage />} />
         <Route path="fulfillment/:orderId" element={<FulfillmentDetailPage />} />
 
         {/* Subscriptions */}
@@ -109,7 +111,7 @@ export default function App() {
         {/* Reports */}
         <Route path="reports" element={<ReportsPage />} />
 
-        {/* Products - static routes BEFORE :id wildcard */}
+        {/* Products — static paths BEFORE :id wildcard */}
         <Route path="products"         element={<ProductDashboardPage />} />
         <Route path="products/new"     element={<ProductDetailPage />} />
         <Route path="products/pricing" element={<ProductDashboardPage />} />

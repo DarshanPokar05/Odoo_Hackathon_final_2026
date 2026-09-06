@@ -74,7 +74,7 @@ export default function ProductDashboardPage() {
     <div>
       <PageHeader title="Product Catalog">
         <Btn onClick={() => navigate('/products/new')}>+ New Product</Btn>
-        <Btn variant="secondary" onClick={() => navigate('/products/pricing')}>Manage Price Fields</Btn>
+        <Btn variant="secondary" onClick={() => navigate('/discount-config')}>Manage Price Fields</Btn>
       </PageHeader>
 
       {/* ── KPI cards ─────────────────────────────────────────────────────── */}

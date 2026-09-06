@@ -284,7 +284,8 @@ export default function QuotationDetailPage() {
   const { data: quotation, isLoading, error } = useQuery({
     queryKey: ['quotation', id],
     queryFn:  () => quotationsApi.getOne(id),
-    enabled:  !isNew,
+    enabled:  !isNew,   // never fire for id === 'new'
+    retry:    false,    // don't retry 404s
     refetchOnWindowFocus: false,
   });
 
@@ -397,7 +398,7 @@ export default function QuotationDetailPage() {
   const editable    = !isNew && quotation?.status === 'DRAFT';
   const activeStep  = STAGE_TO_STEP[quotation?.status] ?? 'Draft';
 
-  // ── New quotation form ────────────────────────────────────────────────────
+  // ── New quotation form — rendered FIRST before any isLoading/error checks ─
   if (isNew) {
     return (
       <div className="max-w-lg mx-auto">
@@ -431,8 +432,8 @@ export default function QuotationDetailPage() {
     );
   }
 
-  if (isLoading) return <div className="flex justify-center py-16"><Spinner /></div>;
-  if (error)     return <Alert variant="error">Failed to load quotation: {error.message}</Alert>;
+  if (!isNew && isLoading) return <div className="flex justify-center py-16"><Spinner /></div>;
+  if (!isNew && error)     return <Alert variant="error">Failed to load quotation: {error.message}</Alert>;
 
   return (
     <div>

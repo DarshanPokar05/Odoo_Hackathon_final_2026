@@ -1,27 +1,25 @@
 import { NavLink, Outlet, useNavigate, Link } from 'react-router-dom';
 import { useAuth } from '../store/authContext.jsx';
 import { useTheme } from '../hooks/useTheme.js';
-import { ThemeToggle, NotificationBell, ToastContainer } from './ui.jsx';
-import { useQuery } from '@tanstack/react-query';
-import api from '../api/axios.js';
+import { ThemeToggle, ToastContainer } from './ui.jsx';
 
-// ── Nav item definitions ──────────────────────────────────────────────────────
-const INTERNAL_NAV = [
-  { to: '/',              label: 'Dashboard',     icon: '⊡' },
-  { to: '/quotations',    label: 'Quotations',    icon: '📋' },
-  { to: '/approvals',     label: 'Approvals',     icon: '✓' },
-  { to: '/fulfillment',   label: 'Fulfillment',   icon: '📦' },
-  { to: '/subscriptions', label: 'Subscriptions', icon: '↻' },
-  { to: '/invoices',      label: 'Invoices',      icon: '💳' },
-  { to: '/deal-health',   label: 'Deal Health',   icon: '❤' },
-  { to: '/reports',       label: 'Reports',       icon: '📊' },
-  { to: '/products',      label: 'Products',      icon: '🏷' },
+// ── Role-based nav item definitions ──────────────────────────────────────────
+// Each item has an optional `roles` array — if present, only those roles see it.
+// Items without `roles` are visible to all internal users.
+const ALL_INTERNAL_NAV = [
+  { to: '/',              label: 'Dashboard',     roles: null },
+  { to: '/quotations',    label: 'Quotations',    roles: ['ADMIN','SALES_REP','SALES_MANAGER','FINANCE'] },
+  { to: '/approvals',     label: 'Approvals',     roles: ['ADMIN','SALES_MANAGER','FINANCE'] },
+  { to: '/fulfillment',   label: 'Fulfillment',   roles: ['ADMIN','FINANCE','SALES_MANAGER'] },
+  { to: '/subscriptions', label: 'Subscriptions', roles: ['ADMIN','FINANCE','SALES_MANAGER','SALES_REP'] },
+  { to: '/invoices',      label: 'Invoices',      roles: ['ADMIN','FINANCE','SALES_MANAGER','SALES_REP'] },
+  { to: '/deal-health',   label: 'Deal Health',   roles: ['ADMIN','SALES_MANAGER','FINANCE'] },
+  { to: '/reports',       label: 'Reports',       roles: ['ADMIN','SALES_MANAGER','FINANCE','SALES_REP'] },
+  { to: '/products',      label: 'Products',      roles: ['ADMIN','SALES_MANAGER','SALES_REP','FINANCE'] },
 ];
 
 const PORTAL_NAV = [
-  { to: '/portal',          label: 'My Quotations', icon: '📋' },
-  { to: '/portal/messages', label: 'Messages',      icon: '💬' },
-  { to: '/profile',         label: 'Profile',       icon: '👤' },
+  { to: '/portal', label: 'My Quotations' },
 ];
 
 // Role label colours
@@ -38,23 +36,20 @@ export default function AppLayout() {
   const { isDark, toggleTheme } = useTheme();
   const navigate = useNavigate();
 
-  // Fetch unread notification count
-  const { data: notifData } = useQuery({
-    queryKey: ['notifications', 'unread'],
-    queryFn:  () => api.get('/notifications?unreadOnly=true').then(r => r.data.data),
-    refetchInterval: 30_000,
-    enabled: !!user && user.role !== 'CUSTOMER',
-  });
-  const unreadCount = Array.isArray(notifData) ? notifData.length : 0;
-
   const handleLogout = () => {
     logout();
     navigate('/login', { replace: true });
   };
 
   const isCustomer = user?.role === 'CUSTOMER';
-  const navItems   = isCustomer ? PORTAL_NAV : INTERNAL_NAV;
   const roleBadge  = ROLE_BADGE[user?.role] ?? ROLE_BADGE.SALES_REP;
+
+  // Filter nav items by role
+  const navItems = isCustomer
+    ? PORTAL_NAV
+    : ALL_INTERNAL_NAV.filter(item =>
+        !item.roles || item.roles.includes(user?.role)
+      );
 
   return (
     <div className="min-h-screen flex flex-col" style={{ background: 'var(--bg)' }}>
@@ -64,7 +59,7 @@ export default function AppLayout() {
         style={{ background: 'var(--surface)' }}
       >
         <div className="max-w-screen-2xl mx-auto flex items-center justify-between px-4 h-14 gap-4">
-          {/* Logo / wordmark */}
+          {/* Logo */}
           <Link to="/" className="flex items-center gap-2 shrink-0">
             <span
               className="font-display font-bold text-base tracking-tight select-none"
@@ -79,40 +74,46 @@ export default function AppLayout() {
           </Link>
 
           {/* Nav links */}
-          <nav className="hidden md:flex items-center gap-0.5 overflow-x-auto flex-1 px-2" role="navigation" aria-label="Main navigation">
-            {navItems.map(({ to, label, icon }) => (
+          <nav
+            className="hidden md:flex items-center gap-0.5 overflow-x-auto flex-1 px-2"
+            role="navigation"
+            aria-label="Main navigation"
+          >
+            {navItems.map(({ to, label }) => (
               <NavLink
                 key={to}
                 to={to}
                 end={to === '/' || to === '/portal'}
                 className={({ isActive }) =>
-                  `flex items-center gap-1.5 px-2.5 py-1.5 rounded-md text-xs font-medium whitespace-nowrap transition-colors ${
+                  `px-2.5 py-1.5 rounded-md text-xs font-medium whitespace-nowrap transition-colors ${
                     isActive
                       ? 'bg-[var(--surface-alt)] text-[var(--accent-solid)]'
                       : 'text-[var(--text-secondary)] hover:bg-[var(--surface-alt)] hover:text-[var(--text-primary)]'
                   }`
                 }
               >
-                <span aria-hidden="true">{icon}</span>
                 {label}
               </NavLink>
             ))}
           </nav>
 
-          {/* Right side: theme, notifications, role badge, logout */}
+          {/* Right side: theme toggle, role badge, email, logout */}
           <div className="flex items-center gap-2 shrink-0">
             <ThemeToggle isDark={isDark} onToggle={toggleTheme} />
-            {!isCustomer && (
-              <NotificationBell count={unreadCount} onClick={() => {}} />
-            )}
+
             {/* Role badge */}
             <span className={`hidden sm:inline-block text-xs font-semibold px-2 py-0.5 rounded-full ${roleBadge}`}>
               {user?.role?.replace(/_/g, ' ') ?? 'USER'}
             </span>
-            {/* User email (truncated) */}
-            <span className="hidden lg:block text-xs text-[var(--text-secondary)] max-w-[140px] truncate" title={user?.email}>
+
+            {/* Email (truncated) */}
+            <span
+              className="hidden lg:block text-xs text-[var(--text-secondary)] max-w-[140px] truncate"
+              title={user?.email}
+            >
               {user?.email}
             </span>
+
             <button
               onClick={handleLogout}
               className="text-xs border border-[var(--border)] text-[var(--text-secondary)] hover:text-[var(--text-primary)] hover:bg-[var(--surface-alt)] px-2.5 py-1.5 rounded-md transition-colors"
@@ -128,7 +129,6 @@ export default function AppLayout() {
         <Outlet />
       </main>
 
-      {/* Global toast container */}
       <ToastContainer />
     </div>
   );

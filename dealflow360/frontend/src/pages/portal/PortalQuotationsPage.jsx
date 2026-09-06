@@ -8,7 +8,10 @@ function fmt(n) {
 }
 
 function quoteTotal(lines = []) {
-  return lines.reduce((s, l) => s + Number(l.unitPrice) * l.quantity * (1 - Number(l.discountPercent) / 100), 0);
+  return lines.reduce(
+    (s, l) => s + Number(l.unitPrice) * l.quantity * (1 - Number(l.discountPercent) / 100),
+    0
+  );
 }
 
 export default function PortalQuotationsPage() {
@@ -28,31 +31,47 @@ export default function PortalQuotationsPage() {
 
       {quotations.length === 0 ? (
         <Card className="p-12 text-center">
-          <p className="text-[var(--text-secondary)]">No quotations yet. Your sales representative will share one with you soon.</p>
+          <p className="text-[var(--text-secondary)]">
+            No quotations yet. Your sales representative will share one with you soon.
+          </p>
         </Card>
       ) : (
         <div className="space-y-3">
           {quotations.map(q => {
             const total = quoteTotal(q.lines);
             return (
-              <Card
+              <div
                 key={q.id}
-                className="p-4 flex items-center justify-between gap-4 cursor-pointer hover:shadow-md transition-all"
+                className="surface rounded-xl p-4 flex items-center justify-between gap-4 cursor-pointer hover:shadow-md transition-all"
+                role="button"
+                tabIndex={0}
                 onClick={() => navigate(`/portal/${q.id}`)}
+                onKeyDown={e => e.key === 'Enter' && navigate(`/portal/${q.id}`)}
               >
                 <div className="flex-1 min-w-0">
                   <div className="flex items-center gap-2 flex-wrap">
                     <StageBadge status={q.status} />
-                    <span className="text-xs text-[var(--text-secondary)] font-mono-df">{q.id.slice(0, 8)}…</span>
+                    <span className="text-xs text-[var(--text-secondary)] font-mono-df">
+                      #{q.id.slice(0, 8)}…
+                    </span>
                   </div>
-                  <p className="font-mono-df font-bold text-[var(--accent-solid)] text-lg mt-1">{fmt(total)}</p>
+                  <p className="font-mono-df font-bold text-[var(--accent-solid)] text-lg mt-1">
+                    {fmt(total)}
+                  </p>
                   <p className="text-xs text-[var(--text-secondary)] mt-0.5">
                     {q.lines?.length ?? 0} line{q.lines?.length !== 1 ? 's' : ''} ·
                     Last updated {new Date(q.lastActivityAt).toLocaleDateString()}
                   </p>
                 </div>
-                <Btn size="sm" variant="outline">View →</Btn>
-              </Card>
+                {/* Explicit navigate on Btn to ensure click always works */}
+                <Btn
+                  size="sm"
+                  variant="outline"
+                  onClick={e => { e.stopPropagation(); navigate(`/portal/${q.id}`); }}
+                >
+                  View →
+                </Btn>
+              </div>
             );
           })}
         </div>

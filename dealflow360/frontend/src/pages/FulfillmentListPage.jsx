@@ -101,6 +101,9 @@ export default function FulfillmentListPage() {
   return (
     <div>
       <PageHeader title="Fulfillment" breadcrumb="Warehouse &amp; Orders">
+        <Btn variant="secondary" size="sm" onClick={() => navigate('/fulfillment/stock')}>
+          Manage Stock
+        </Btn>
         <LiveDot />
       </PageHeader>
 

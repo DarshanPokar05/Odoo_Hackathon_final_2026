@@ -182,21 +182,39 @@ export default function InvoiceDetailPage() {
       </Card>
 
       {/* Action buttons */}
-      <div className="flex gap-2">
+      <div className="flex gap-2 flex-wrap">
         {!isPaid && (
           <Btn
             onClick={handlePay}
             disabled={paying || verifyMutation.isPending}
           >
-            {paying ? 'Opening payment…' : 'Record Payment (Razorpay)'}
+            {paying ? 'Opening payment…' : '💳 Pay with Razorpay'}
           </Btn>
         )}
+        {isPaid && (
+          <div className="flex items-center gap-2 px-3 py-2 rounded-lg bg-green-50 dark:bg-green-900/30 text-green-700 dark:text-green-300 text-sm font-medium">
+            ✓ Paid
+          </div>
+        )}
         {invoice.pdfPath && (
-          <Btn variant="secondary" as="a" href={`/invoices-pdf/${invoice.id}.pdf`} target="_blank">
-            Download Summary
+          <Btn
+            variant="secondary"
+            onClick={() => window.open(`/invoices-pdf/invoice-${invoice.id}.pdf`, '_blank')}
+          >
+            Download PDF
           </Btn>
         )}
       </div>
+
+      {/* Razorpay setup hint */}
+      {!isPaid && (
+        <p className="text-xs text-[var(--text-secondary)] mt-2">
+          Add <code className="bg-[var(--surface-alt)] px-1 rounded">RAZORPAY_KEY_ID</code> and{' '}
+          <code className="bg-[var(--surface-alt)] px-1 rounded">RAZORPAY_KEY_SECRET</code> to{' '}
+          <code className="bg-[var(--surface-alt)] px-1 rounded">backend/.env</code> to enable live payments.
+          Test keys start with <code className="bg-[var(--surface-alt)] px-1 rounded">rzp_test_</code>.
+        </p>
+      )}
     </div>
   );
 }
